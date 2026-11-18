@@ -12,6 +12,7 @@ from app.api.enrollments import router as enrollments_router
 from app.api.units import router as units_router
 from app.api.admin import router as admin_router
 from app.api.files import router as files_router
+from app.api.chat import router as chat_router
 
 settings = get_settings()
 
@@ -58,3 +59,4 @@ app.include_router(enrollments_router)
 app.include_router(units_router)
 app.include_router(admin_router)
 app.include_router(files_router)
+app.include_router(chat_router)

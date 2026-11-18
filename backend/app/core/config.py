@@ -41,7 +41,9 @@ class Settings(BaseSettings):
 
     # LLM & RAG
     GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     MISTRAL_API_KEY: str = ""
+    MISTRAL_MODEL: str = "mistral-small-latest"
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     RAG_HYBRID_ENABLED: bool = True
     CHAT_LIMIT_PER_HOUR: int = 20

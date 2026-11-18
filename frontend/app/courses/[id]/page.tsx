@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getAccessToken } from "@/lib/api";
 import { AppShell } from "@/components/shared/AppShell";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { CopyField } from "@/components/shared/CopyField";
@@ -12,12 +12,15 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FormField } from "@/components/shared/FormField";
 import { FileRow, FileItem } from "@/components/shared/FileRow";
+import { ChatMessage, ChatMessageItem, SourceCitation } from "@/components/shared/ChatMessage";
 import { StatusType } from "@/components/shared/StatusBadge";
 import { Button } from "@/components/ui/button";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Plus, Loader2, Upload, RotateCcw } from "lucide-react";
+import { Plus, Loader2, Upload, RotateCcw, Send } from "lucide-react";
 import { toast } from "sonner";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface CourseDetail {
   id: string;
@@ -61,6 +64,17 @@ interface BackendFileItem {
   deleted_at?: string;
 }
 
+interface BackendChatMessage {
+  id: string;
+  course_id: string;
+  user_id: string;
+  question: string;
+  answer: string;
+  sources: Array<{ file_id: string; file_name: string; page: number }>;
+  rating?: string | null;
+  created_at: string;
+}
+
 export default function CourseDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -78,6 +92,13 @@ export default function CourseDetailPage() {
   const [unitFiles, setUnitFiles] = React.useState<Record<string, BackendFileItem[]>>({});
   const [uploadingUnitId, setUploadingUnitId] = React.useState<string | null>(null);
   const [showRecycleBin, setShowRecycleBin] = React.useState(false);
+
+  // Chat / Ask state
+  const [chatMessages, setChatMessages] = React.useState<ChatMessageItem[]>([]);
+  const [questionInput, setQuestionInput] = React.useState("");
+  const [chatLoading, setChatLoading] = React.useState(false);
+  const [chatHistoryLoaded, setChatHistoryLoaded] = React.useState(false);
+  const chatEndRef = React.useRef<HTMLDivElement>(null);
 
   // File action dialogs
   const [deleteFileOpen, setDeleteFileOpen] = React.useState(false);
@@ -145,6 +166,35 @@ export default function CourseDetailPage() {
     }
   }, [courseId, user, router, fetchUnitFiles, showRecycleBin]);
 
+  const fetchChatHistory = React.useCallback(async () => {
+    try {
+      const history = await apiFetch<BackendChatMessage[]>(`/courses/${courseId}/chat`);
+      const items: ChatMessageItem[] = [];
+      for (const h of history) {
+        items.push({
+          id: `${h.id}-q`,
+          sender: "user",
+          content: h.question,
+        });
+        items.push({
+          id: h.id,
+          sender: "assistant",
+          content: h.answer,
+          sources: (h.sources || []).map((s) => ({
+            fileId: s.file_id,
+            fileName: s.file_name,
+            page: s.page,
+          })),
+          rating: (h.rating as "helpful" | "unhelpful") || null,
+        });
+      }
+      setChatMessages(items);
+      setChatHistoryLoaded(true);
+    } catch {
+      setChatHistoryLoaded(true);
+    }
+  }, [courseId]);
+
   React.useEffect(() => {
     if (!authLoading && !user) {
       router.push("/login");
@@ -152,6 +202,13 @@ export default function CourseDetailPage() {
       fetchCourseData();
     }
   }, [user, authLoading, courseId, router, fetchCourseData]);
+
+  // Load chat history when activeTab switches to 'ask'
+  React.useEffect(() => {
+    if (activeTab === "ask" && !chatHistoryLoaded && courseId) {
+      fetchChatHistory();
+    }
+  }, [activeTab, chatHistoryLoaded, courseId, fetchChatHistory]);
 
   // Polling for queued/processing files every 3 seconds (Section 4.2)
   React.useEffect(() => {
@@ -313,6 +370,156 @@ export default function CourseDetailPage() {
       await fetchUnitFiles(units, showRecycleBin);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Restore failed");
+    }
+  };
+
+  // Rating handler
+  const handleRating = async (messageId: string, rating: "helpful" | "unhelpful") => {
+    try {
+      const backendRating = rating === "helpful" ? "helpful" : "not_helpful";
+      await apiFetch(`/chat/${messageId}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ rating: backendRating }),
+      });
+      setChatMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, rating } : m))
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to submit rating");
+    }
+  };
+
+  // Citation click handler -> download file
+  const handleSourceClick = async (source: SourceCitation) => {
+    try {
+      const res = await apiFetch<{ download_url: string }>(`/files/${source.fileId}/download`);
+      window.open(res.download_url, "_blank");
+    } catch {
+      toast.info(`Source: ${source.fileName} (Page ${source.page})`);
+    }
+  };
+
+  // Streaming question handler
+  const handleSendQuestion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const q = questionInput.trim();
+    if (!q || chatLoading) return;
+
+    setQuestionInput("");
+    setChatLoading(true);
+
+    const userMsgId = `user-${Date.now()}`;
+    const assistantMsgId = `assistant-${Date.now()}`;
+
+    // Add user message & empty assistant placeholder
+    setChatMessages((prev) => [
+      ...prev,
+      { id: userMsgId, sender: "user", content: q },
+      { id: assistantMsgId, sender: "assistant", content: "", sources: [] },
+    ]);
+
+    try {
+      const token = getAccessToken();
+      const res = await fetch(`${API_BASE_URL}/courses/${courseId}/chat/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        credentials: "include",
+        body: JSON.stringify({ question: q }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || "Error generating response");
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("Stream reader not available");
+
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const block of lines) {
+          const trimmed = block.trim();
+          if (!trimmed) continue;
+
+          let eventType = "message";
+          let dataStr = "";
+
+          const blockLines = trimmed.split("\n");
+          for (const line of blockLines) {
+            if (line.startsWith("event: ")) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              dataStr = line.slice(6).trim();
+            }
+          }
+
+          if (eventType === "sources") {
+            try {
+              const parsedSources = JSON.parse(dataStr);
+              setChatMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? {
+                        ...m,
+                        sources: parsedSources.map((s: { file_id: string; file_name: string; page: number }) => ({
+                          fileId: s.file_id,
+                          fileName: s.file_name,
+                          page: s.page,
+                        })),
+                      }
+                    : m
+                )
+              );
+            } catch {}
+          } else if (eventType === "token") {
+            try {
+              const tokenData = JSON.parse(dataStr);
+              const textChunk = tokenData.text || "";
+              setChatMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId ? { ...m, content: m.content + textChunk } : m
+                )
+              );
+            } catch {}
+          } else if (eventType === "done") {
+            try {
+              const doneData = JSON.parse(dataStr);
+              setChatMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId ? { ...m, id: doneData.id || assistantMsgId } : m
+                )
+              );
+            } catch {}
+          }
+        }
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Error asking question";
+      toast.error(errMsg);
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsgId
+            ? { ...m, content: `Error: ${errMsg}` }
+            : m
+        )
+      );
+    } finally {
+      setChatLoading(false);
+      setTimeout(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
     }
   };
 
@@ -609,16 +816,60 @@ export default function CourseDetailPage() {
             )}
           </TabsPrimitive.Content>
 
-          {/* TAB: ASK (RAG Assistant) */}
-          <TabsPrimitive.Content value="ask" className="focus:outline-none">
-            <div className="rounded border border-border bg-bg p-6 max-w-[720px] space-y-4">
-              <h2 className="text-base font-semibold text-text">Course AI Assistant</h2>
-              <p className="text-sm text-text-muted">
-                Ask questions about your course materials with page-level citations.
-              </p>
-              <div className="border border-border rounded p-4 bg-panel text-xs text-text-muted">
-                AI Q&A will be enabled once unit PDFs are ingested in Phases 3 and 4.
+          {/* TAB: ASK (RAG Assistant with Streaming) */}
+          <TabsPrimitive.Content value="ask" className="focus:outline-none space-y-6">
+            <div className="rounded border border-border bg-bg p-6 max-w-[760px] space-y-6">
+              <div>
+                <h2 className="text-base font-semibold text-text">Course AI Assistant</h2>
+                <p className="text-sm text-text-muted mt-1">
+                  Ask questions about your course materials with page-level citations.
+                </p>
               </div>
+
+              {/* Chat Thread */}
+              <div className="min-h-[240px] max-h-[480px] overflow-y-auto space-y-4 pr-2 border-b border-border pb-6">
+                {chatMessages.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-text-muted">
+                    No questions asked yet. Ask a question below to search across course documents.
+                  </div>
+                ) : (
+                  chatMessages.map((m) => (
+                    <ChatMessage
+                      key={m.id}
+                      message={m}
+                      onRating={handleRating}
+                      onSourceClick={handleSourceClick}
+                    />
+                  ))
+                )}
+                {chatLoading && chatMessages[chatMessages.length - 1]?.content === "" && (
+                  <div className="flex items-center gap-2 text-xs text-text-muted py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+                    Searching course material...
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Input Form */}
+              <form onSubmit={handleSendQuestion} className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Ask a question about the course PDFs..."
+                  value={questionInput}
+                  onChange={(e) => setQuestionInput(e.target.value)}
+                  disabled={chatLoading}
+                  className="flex-1 rounded border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent focus:outline-none"
+                />
+                <Button type="submit" variant="primary" disabled={chatLoading || !questionInput.trim()} className="gap-1.5 shrink-0">
+                  {chatLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
+                  ) : (
+                    <Send className="h-4 w-4" strokeWidth={1.5} />
+                  )}
+                  Ask
+                </Button>
+              </form>
             </div>
           </TabsPrimitive.Content>
 
