@@ -183,3 +183,95 @@ async def require_course_manage(
         )
 
     return course
+
+
+async def require_file_access(
+    file_id: uuid.UUID,
+    user: User,
+    db: AsyncSession,
+) -> tuple[Any, Course]:
+    """
+    Load file and course, and check can_download_file / file access.
+    Raises 404 if file does not exist, is not ready/deleted for students,
+    or user lacks permission (preventing IDOR).
+    """
+    from app.models.file import File
+
+    stmt = select(File, Course).join(Course, File.course_id == Course.id).where(File.id == file_id)
+    result = await db.execute(stmt)
+    row = result.first()
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found.",
+        )
+
+    file_rec, course = row
+
+    if is_admin(user):
+        return file_rec, course
+
+    if user.role == UserRole.TEACHER or user.role == "teacher":
+        if course.teacher_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found.",
+            )
+        return file_rec, course
+
+    if user.role == UserRole.STUDENT or user.role == "student":
+        # Students can only access ready and non-deleted files
+        if file_rec.deleted_at is not None or file_rec.status != "ready":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found.",
+            )
+        enrollment = await get_enrollment_for_user(db, user.id, course.id)
+        if not enrollment or enrollment.status != EnrollmentStatus.APPROVED:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found.",
+            )
+        return file_rec, course
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="File not found.",
+    )
+
+
+async def require_file_manage(
+    file_id: uuid.UUID,
+    user: User,
+    db: AsyncSession,
+) -> tuple[Any, Course]:
+    """
+    Load file and course, and verify manage (delete/retry/restore) permissions.
+    Only owning teacher or admin. Raises 404 on violation (anti-IDOR).
+    """
+    from app.models.file import File
+
+    stmt = select(File, Course).join(Course, File.course_id == Course.id).where(File.id == file_id)
+    result = await db.execute(stmt)
+    row = result.first()
+
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found.",
+        )
+
+    file_rec, course = row
+
+    if is_admin(user):
+        return file_rec, course
+
+    if (user.role == UserRole.TEACHER or user.role == "teacher") and course.teacher_id == user.id:
+        return file_rec, course
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="File not found.",
+    )
+

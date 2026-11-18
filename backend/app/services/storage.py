@@ -1,4 +1,5 @@
 import io
+import os
 from typing import AsyncGenerator, Optional
 import aioboto3
 from botocore.config import Config
@@ -121,22 +122,40 @@ class StorageService:
             return url
 
 
-# In-memory fake storage for tests
+# In-memory and local filesystem fake storage for tests & local dev
 class FakeStorage:
-    def __init__(self):
+    def __init__(self, base_dir: Optional[str] = None):
         self.files: dict[str, bytes] = {}
+        if base_dir is None:
+            base_dir = os.path.join(os.path.dirname(__file__), "..", "..", ".local_storage")
+        self.base_dir = os.path.abspath(base_dir)
+        os.makedirs(self.base_dir, exist_ok=True)
 
     async def ping(self) -> bool:
         return True
 
+    def _file_path(self, storage_key: str) -> str:
+        safe_key = storage_key.replace("/", os.sep).replace("\\", os.sep)
+        return os.path.abspath(os.path.join(self.base_dir, safe_key))
+
     async def put_pdf(self, storage_key: str, data: bytes) -> str:
         self.files[storage_key] = data
+        p = self._file_path(storage_key)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as f:
+            f.write(data)
         return storage_key
 
     async def get_pdf_bytes(self, storage_key: str) -> bytes:
-        if storage_key not in self.files:
-            raise KeyError(f"Key {storage_key} not found in FakeStorage")
-        return self.files[storage_key]
+        if storage_key in self.files:
+            return self.files[storage_key]
+        p = self._file_path(storage_key)
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                data = f.read()
+                self.files[storage_key] = data
+                return data
+        raise KeyError(f"Key {storage_key} not found in FakeStorage")
 
     async def get_pdf_stream(self, storage_key: str) -> AsyncGenerator[bytes, None]:
         data = await self.get_pdf_bytes(storage_key)
@@ -144,6 +163,12 @@ class FakeStorage:
 
     async def delete_pdf(self, storage_key: str) -> bool:
         self.files.pop(storage_key, None)
+        p = self._file_path(storage_key)
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
         return True
 
     async def generate_presigned_download_url(self, storage_key: str, expires_in: int = 60) -> str:
@@ -152,3 +177,16 @@ class FakeStorage:
 
 # Default singleton instance
 storage = StorageService()
+
+_fallback_fake_storage: Optional[FakeStorage] = None
+
+
+def get_storage():
+    """Returns Cloudflare R2 storage if configured, or in-memory FakeStorage for local dev/testing."""
+    global _fallback_fake_storage
+    if storage.is_configured:
+        return storage
+    if _fallback_fake_storage is None:
+        _fallback_fake_storage = FakeStorage()
+    return _fallback_fake_storage
+

@@ -11,10 +11,12 @@ import { DataTable, Column } from "@/components/shared/DataTable";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FormField } from "@/components/shared/FormField";
+import { FileRow, FileItem } from "@/components/shared/FileRow";
+import { StatusType } from "@/components/shared/StatusBadge";
 import { Button } from "@/components/ui/button";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Plus, Loader2 } from "lucide-react";
+import { Plus, Loader2, Upload, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 interface CourseDetail {
@@ -46,6 +48,19 @@ interface EnrollmentItem {
   decided_at?: string;
 }
 
+interface BackendFileItem {
+  id: string;
+  unit_id: string;
+  course_id: string;
+  original_name: string;
+  size_bytes: number;
+  status: string;
+  error_msg?: string;
+  page_count?: number;
+  created_at: string;
+  deleted_at?: string;
+}
+
 export default function CourseDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -58,6 +73,16 @@ export default function CourseDetailPage() {
   const [requests, setRequests] = React.useState<EnrollmentItem[]>([]);
   const [students, setStudents] = React.useState<EnrollmentItem[]>([]);
   const [loading, setLoading] = React.useState(true);
+
+  // Files state keyed by unitId
+  const [unitFiles, setUnitFiles] = React.useState<Record<string, BackendFileItem[]>>({});
+  const [uploadingUnitId, setUploadingUnitId] = React.useState<string | null>(null);
+  const [showRecycleBin, setShowRecycleBin] = React.useState(false);
+
+  // File action dialogs
+  const [deleteFileOpen, setDeleteFileOpen] = React.useState(false);
+  const [selectedFile, setSelectedFile] = React.useState<BackendFileItem | null>(null);
+  const [deleteFileLoading, setDeleteFileLoading] = React.useState(false);
 
   // Tab state
   const initialTab = searchParams?.get("tab") || "materials";
@@ -76,7 +101,23 @@ export default function CourseDetailPage() {
   // Join code rotate state
   const [rotating, setRotating] = React.useState(false);
 
+  const fileInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({});
+
   const isTeacher = user?.role === "teacher" || user?.role === "admin";
+
+  const fetchUnitFiles = React.useCallback(async (unitList: UnitItem[], includeDeleted = false) => {
+    const filesMap: Record<string, BackendFileItem[]> = {};
+    for (const unit of unitList) {
+      try {
+        const query = includeDeleted ? "?include_deleted=true" : "";
+        const files = await apiFetch<BackendFileItem[]>(`/units/${unit.id}/files${query}`);
+        filesMap[unit.id] = files;
+      } catch {
+        filesMap[unit.id] = [];
+      }
+    }
+    setUnitFiles(filesMap);
+  }, []);
 
   const fetchCourseData = React.useCallback(async () => {
     try {
@@ -85,6 +126,7 @@ export default function CourseDetailPage() {
 
       const unitsData = await apiFetch<UnitItem[]>(`/courses/${courseId}/units`);
       setUnits(unitsData);
+      await fetchUnitFiles(unitsData, showRecycleBin);
 
       if (user?.role === "teacher" || user?.role === "admin") {
         const reqData = await apiFetch<EnrollmentItem[]>(`/courses/${courseId}/requests`);
@@ -101,7 +143,7 @@ export default function CourseDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [courseId, user, router]);
+  }, [courseId, user, router, fetchUnitFiles, showRecycleBin]);
 
   React.useEffect(() => {
     if (!authLoading && !user) {
@@ -110,6 +152,22 @@ export default function CourseDetailPage() {
       fetchCourseData();
     }
   }, [user, authLoading, courseId, router, fetchCourseData]);
+
+  // Polling for queued/processing files every 3 seconds (Section 4.2)
+  React.useEffect(() => {
+    const allFiles = Object.values(unitFiles).flat();
+    const hasActiveFiles = allFiles.some((f) => f.status === "queued" || f.status === "processing");
+
+    if (!hasActiveFiles) return;
+
+    const intervalId = setInterval(async () => {
+      if (units.length > 0) {
+        await fetchUnitFiles(units, showRecycleBin);
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [unitFiles, units, fetchUnitFiles, showRecycleBin]);
 
   const handleRotateCode = async () => {
     setRotating(true);
@@ -138,7 +196,7 @@ export default function CourseDetailPage() {
       toast.success("Unit created");
       setUnitOpen(false);
       setUnitTitle("");
-      await fetchCourseData();
+      fetchCourseData();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to create unit");
     } finally {
@@ -153,9 +211,9 @@ export default function CourseDetailPage() {
         body: JSON.stringify({ status }),
       });
       toast.success(`Request ${status}`);
-      await fetchCourseData();
+      fetchCourseData();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to update enrollment");
+      toast.error(err instanceof Error ? err.message : `Failed to ${status} request`);
     }
   };
 
@@ -170,7 +228,7 @@ export default function CourseDetailPage() {
       toast.success("Student removed");
       setRemoveOpen(false);
       setSelectedStudent(null);
-      await fetchCourseData();
+      fetchCourseData();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to remove student");
     } finally {
@@ -178,11 +236,90 @@ export default function CourseDetailPage() {
     }
   };
 
-  if (authLoading || loading || !course) {
+  // Upload handler
+  const handleFileUpload = async (unitId: string, file: File) => {
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      toast.error("Only PDF files are supported");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("File exceeds 20 MB size limit");
+      return;
+    }
+
+    setUploadingUnitId(unitId);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      await apiFetch(`/units/${unitId}/files`, {
+        method: "POST",
+        body: formData,
+      });
+      toast.success(`Uploaded ${file.name}. Ingestion in progress...`);
+      await fetchUnitFiles(units, showRecycleBin);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingUnitId(null);
+    }
+  };
+
+  // Download handler (60-second presigned URL)
+  const handleDownload = async (fileItem: BackendFileItem) => {
+    try {
+      const res = await apiFetch<{ download_url: string; expires_in: number }>(
+        `/files/${fileItem.id}/download`
+      );
+      window.open(res.download_url, "_blank");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Download failed");
+    }
+  };
+
+  // Retry handler
+  const handleRetry = async (fileItem: BackendFileItem) => {
+    try {
+      await apiFetch(`/files/${fileItem.id}/retry`, { method: "POST" });
+      toast.info(`Retrying ${fileItem.original_name}...`);
+      await fetchUnitFiles(units, showRecycleBin);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Retry failed");
+    }
+  };
+
+  // Delete handler
+  const handleDeleteConfirm = async () => {
+    if (!selectedFile) return;
+    setDeleteFileLoading(true);
+    try {
+      await apiFetch(`/files/${selectedFile.id}`, { method: "DELETE" });
+      toast.success("File deleted");
+      setDeleteFileOpen(false);
+      setSelectedFile(null);
+      await fetchUnitFiles(units, showRecycleBin);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete file");
+    } finally {
+      setDeleteFileLoading(false);
+    }
+  };
+
+  // Restore handler
+  const handleRestore = async (fileItem: BackendFileItem) => {
+    try {
+      await apiFetch(`/files/${fileItem.id}/restore`, { method: "POST" });
+      toast.success(`Restored ${fileItem.original_name}. Re-indexing...`);
+      await fetchUnitFiles(units, showRecycleBin);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Restore failed");
+    }
+  };
+
+  if (loading || !course) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg text-text-muted text-sm">
-        <Loader2 className="h-5 w-5 animate-spin mr-2" strokeWidth={1.5} />
-        Loading course...
+      <div className="flex h-screen items-center justify-center bg-bg">
+        <Loader2 className="h-6 w-6 animate-spin text-text-muted" strokeWidth={1.5} />
       </div>
     );
   }
@@ -191,8 +328,9 @@ export default function CourseDetailPage() {
     { header: "Name", cell: (i) => i.student_name || "Student" },
     { header: "Email", accessorKey: "student_email" },
     {
-      header: "Joined",
-      cell: (i) => (i.decided_at ? new Date(i.decided_at).toLocaleDateString("en-IN") : "—"),
+      header: "Enrolled",
+      cell: (i) =>
+        i.decided_at ? new Date(i.decided_at).toLocaleDateString("en-IN") : "-",
     },
     {
       header: "Actions",
@@ -308,7 +446,27 @@ export default function CourseDetailPage() {
           {/* TAB: MATERIALS */}
           <TabsPrimitive.Content value="materials" className="space-y-6 focus:outline-none">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-text">Course Units</h2>
+              <div className="flex items-center gap-3">
+                <h2 className="text-base font-semibold text-text">Course Units</h2>
+                {isTeacher && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !showRecycleBin;
+                      setShowRecycleBin(next);
+                      fetchUnitFiles(units, next);
+                    }}
+                    className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                      showRecycleBin
+                        ? "border-accent text-accent bg-panel font-medium"
+                        : "border-border text-text-muted hover:text-text"
+                    }`}
+                  >
+                    {showRecycleBin ? "Viewing Recycle Bin" : "Recycle Bin"}
+                  </button>
+                )}
+              </div>
+
               {isTeacher && (
                 <Button
                   variant="secondary"
@@ -332,26 +490,121 @@ export default function CourseDetailPage() {
               </div>
             ) : (
               <div className="space-y-6">
-                {units.map((unit) => (
-                  <section key={unit.id} className="rounded border border-border bg-bg p-4 space-y-3">
-                    <div className="flex items-center justify-between border-b border-border pb-2">
-                      <h3 className="text-base font-semibold text-text">{unit.title}</h3>
-                      {isTeacher && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toast.info("PDF upload active in Phase 3")}
-                          className="text-xs"
-                        >
-                          Upload PDF
-                        </Button>
+                {units.map((unit) => {
+                  const files = unitFiles[unit.id] || [];
+                  const activeFiles = files.filter((f) => !f.deleted_at);
+                  const deletedFiles = files.filter((f) => !!f.deleted_at);
+                  const displayedFiles = showRecycleBin ? deletedFiles : activeFiles;
+
+                  return (
+                    <section key={unit.id} className="rounded border border-border bg-bg p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-border pb-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-semibold text-text">{unit.title}</h3>
+                          <span className="text-xs text-text-muted">
+                            ({displayedFiles.length} {displayedFiles.length === 1 ? "file" : "files"})
+                          </span>
+                        </div>
+
+                        {isTeacher && !showRecycleBin && (
+                          <div>
+                            <input
+                              type="file"
+                              accept="application/pdf"
+                              className="hidden"
+                              ref={(el) => {
+                                fileInputRefs.current[unit.id] = el;
+                              }}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  handleFileUpload(unit.id, file);
+                                }
+                                e.target.value = "";
+                              }}
+                            />
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => fileInputRefs.current[unit.id]?.click()}
+                              disabled={uploadingUnitId === unit.id}
+                              className="gap-1.5 text-xs text-accent hover:text-accent-hover"
+                            >
+                              {uploadingUnitId === unit.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+                              ) : (
+                                <Upload className="h-3.5 w-3.5" strokeWidth={1.5} />
+                              )}
+                              Upload PDF
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      {displayedFiles.length === 0 ? (
+                        <p className="text-xs text-text-muted py-2">
+                          {showRecycleBin
+                            ? "No deleted files in this unit."
+                            : "No PDF files uploaded to this unit yet."}
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-border">
+                          {displayedFiles.map((f) => {
+                            const fileItem: FileItem = {
+                              id: f.id,
+                              name: f.original_name,
+                              sizeBytes: f.size_bytes,
+                              uploadedAt: new Date(f.created_at).toLocaleDateString("en-IN"),
+                              status: f.status as StatusType,
+                              errorMessage: f.error_msg,
+                            };
+
+                            if (showRecycleBin) {
+                              return (
+                                <div
+                                  key={f.id}
+                                  className="flex items-center justify-between py-2 text-sm"
+                                >
+                                  <div className="flex items-center gap-2 truncate">
+                                    <span className="font-medium text-text truncate">
+                                      {f.original_name}
+                                    </span>
+                                    <span className="text-xs text-text-muted">
+                                      (deleted {new Date(f.deleted_at!).toLocaleDateString("en-IN")})
+                                    </span>
+                                  </div>
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => handleRestore(f)}
+                                    className="gap-1 text-xs"
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.5} />
+                                    Restore
+                                  </Button>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <FileRow
+                                key={f.id}
+                                file={fileItem}
+                                isTeacher={isTeacher}
+                                onDownload={() => handleDownload(f)}
+                                onRetry={() => handleRetry(f)}
+                                onDelete={() => {
+                                  setSelectedFile(f);
+                                  setDeleteFileOpen(true);
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
                       )}
-                    </div>
-                    <p className="text-xs text-text-muted py-2">
-                      No PDF files uploaded to this unit yet.
-                    </p>
-                  </section>
-                ))}
+                    </section>
+                  );
+                })}
               </div>
             )}
           </TabsPrimitive.Content>
@@ -437,6 +690,17 @@ export default function CourseDetailPage() {
           confirmLabel="Remove"
           onConfirm={handleRemoveStudent}
           isLoading={removeLoading}
+        />
+
+        {/* Confirm Dialog: Delete File */}
+        <ConfirmDialog
+          open={deleteFileOpen}
+          onOpenChange={setDeleteFileOpen}
+          title={`Delete ${selectedFile?.original_name || "file"}?`}
+          description="The file and its search index will be deleted immediately. You can restore it from the Recycle Bin within 30 days."
+          confirmLabel="Delete"
+          onConfirm={handleDeleteConfirm}
+          isLoading={deleteFileLoading}
         />
       </div>
     </AppShell>

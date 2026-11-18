@@ -3,6 +3,7 @@ from app.models.audit import AuditLog
 from app.models.course import Course
 from app.models.enrollment import Enrollment, EnrollmentStatus
 from app.models.unit import Unit
+from app.models.file import File, FileStatus
 
 __all__ = [
     "User",
@@ -12,4 +13,6 @@ __all__ = [
     "Enrollment",
     "EnrollmentStatus",
     "Unit",
+    "File",
+    "FileStatus",
 ]

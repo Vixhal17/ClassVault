@@ -27,3 +27,4 @@ class Unit(Base):
 
     # Relationships
     course = relationship("Course", back_populates="units", lazy="selectin")
+    files = relationship("File", back_populates="unit", cascade="all, delete-orphan", lazy="selectin")
