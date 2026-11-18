@@ -6,6 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import get_settings
 from app.core.logging import logger
 from app.api.health import router as health_router
+from app.api.auth import router as auth_router
 
 settings = get_settings()
 
@@ -46,3 +47,4 @@ app.add_middleware(
 
 # Routers
 app.include_router(health_router)
+app.include_router(auth_router)
