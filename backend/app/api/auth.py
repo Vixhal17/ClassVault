@@ -66,12 +66,25 @@ async def register(
             detail="An account with this email address already exists.",
         )
 
-    # Self-signup creates STUDENTS ONLY
+    # Determine role: allow student or teacher, reject admin
+    assigned_role = UserRole.STUDENT
+    if req.role:
+        role_str = req.role.strip().lower()
+        if role_str in ("teacher", "professor"):
+            assigned_role = UserRole.TEACHER
+        elif role_str == "student":
+            assigned_role = UserRole.STUDENT
+        elif role_str == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Administrator accounts cannot be self-registered.",
+            )
+
     user = User(
         name=req.name.strip(),
         email=email,
         password_hash=hash_password(req.password),
-        role=UserRole.STUDENT,
+        role=assigned_role,
         is_active=True,
     )
     db.add(user)
@@ -85,6 +98,7 @@ async def register(
         target_type="user",
         target_id=str(user.id),
         ip=ip,
+        metadata={"role": user.role.value},
     )
 
     return user

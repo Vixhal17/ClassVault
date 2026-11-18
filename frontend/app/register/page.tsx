@@ -12,6 +12,7 @@ export default function RegisterPage() {
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [role, setRole] = React.useState("student");
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
 
@@ -34,7 +35,7 @@ export default function RegisterPage() {
 
     setLoading(true);
     try {
-      await register(name, email, password);
+      await register(name, email, password, role);
     } catch (err: unknown) {
       if (err instanceof Error) {
         setError(err.message);
@@ -52,11 +53,29 @@ export default function RegisterPage() {
         {/* Wordmark and Page Title */}
         <div className="space-y-1">
           <span className="text-sm font-semibold text-text tracking-tight">ClassVault</span>
-          <h1 className="text-2xl font-semibold text-text">Create student account</h1>
+          <h1 className="text-2xl font-semibold text-text">
+            {role === "teacher" ? "Create professor account" : "Create student account"}
+          </h1>
         </div>
 
         {/* Registration Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label htmlFor="role-select" className="text-xs font-medium text-text">
+              Account type
+            </label>
+            <select
+              id="role-select"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              disabled={loading}
+              className="w-full px-3 py-2 text-sm rounded-md border border-border bg-panel text-text focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="student">Student (browse courses, access materials, ask RAG assistant)</option>
+              <option value="teacher">Professor / Teacher (create courses, upload PDFs, manage students)</option>
+            </select>
+          </div>
+
           <FormField
             label="Full name"
             type="text"
@@ -64,7 +83,7 @@ export default function RegisterPage() {
             onChange={(e) => setName(e.target.value)}
             disabled={loading}
             autoComplete="name"
-            placeholder="e.g. Aarav Sharma"
+            placeholder={role === "teacher" ? "e.g. Prof. David Miller" : "e.g. Aarav Sharma"}
             required
           />
 
@@ -75,7 +94,7 @@ export default function RegisterPage() {
             onChange={(e) => setEmail(e.target.value)}
             disabled={loading}
             autoComplete="email"
-            placeholder="name@university.edu"
+            placeholder={role === "teacher" ? "prof.miller@university.edu" : "student@university.edu"}
             required
           />
 
@@ -91,26 +110,29 @@ export default function RegisterPage() {
           />
 
           {error && (
-            <p className="text-xs text-danger" role="alert">
+            <div className="rounded border border-danger/20 bg-danger-bg p-3 text-xs text-danger">
               {error}
-            </p>
+            </div>
           )}
 
-          <Button
-            type="submit"
-            variant="primary"
-            className="w-full gap-2"
-            disabled={loading}
-          >
-            {loading && <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />}
-            {loading ? "Creating account" : "Create account"}
+          <Button type="submit" variant="primary" className="w-full" disabled={loading}>
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.5} />
+                Creating account...
+              </span>
+            ) : role === "teacher" ? (
+              "Sign up as Professor"
+            ) : (
+              "Sign up as Student"
+            )}
           </Button>
         </form>
 
-        {/* Link to Login */}
-        <div className="text-xs text-text-muted">
+        {/* Footer Link to Login */}
+        <div className="text-center text-xs text-text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="text-accent hover:underline hover:text-accent-hover font-medium">
+          <Link href="/login" className="text-primary hover:underline font-medium">
             Sign in
           </Link>
         </div>

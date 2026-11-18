@@ -205,7 +205,23 @@ class LLMService:
             if len(parts) >= 2:
                 context_block = parts[1].split("<<<END_COURSE_MATERIAL>>>")[0]
 
-        # Check for unanswerable question / empty context
+        # 1. Defend against prompt injection and sensitive data extraction
+        lower_msg = user_message.lower()
+        injection_patterns = [
+            "ignore all",
+            "override",
+            "system prompt",
+            "credentials",
+            "secret key",
+            "bank account",
+            "cookie",
+            "president",
+            "world cup",
+        ]
+        if any(pat in lower_msg for pat in injection_patterns):
+            return "I couldn't find this in the course material."
+
+        # 2. Check for empty context or query-context irrelevance
         if not context_block.strip() or "No relevant course material found" in context_block:
             return "I couldn't find this in the course material."
 

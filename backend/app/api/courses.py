@@ -222,3 +222,21 @@ async def rotate_join_code(
     await db.refresh(course)
 
     return await get_course(id=course.id, current_user=current_user, db=db)
+
+
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+async def delete_course(
+    id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete a course.
+    Teachers can delete courses they own; Admins can delete any course.
+    Cascades to units, files, enrollments, and chat messages.
+    """
+    course = await require_course_manage(id, current_user, db)
+    course_name = course.name
+    await db.delete(course)
+    await db.commit()
+    return {"success": True, "message": f"Course '{course_name}' deleted."}

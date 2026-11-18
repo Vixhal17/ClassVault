@@ -12,7 +12,7 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { FormField } from "@/components/shared/FormField";
 import { Button } from "@/components/ui/button";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Plus, UserPlus, Loader2 } from "lucide-react";
+import { Plus, UserPlus, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface CourseItem {
@@ -107,6 +107,23 @@ export default function CoursesPage() {
     }
   };
 
+  const handleDeleteCourse = async (courseId: string, courseName: string) => {
+    if (!window.confirm(`Are you sure you want to delete course "${courseName}"?`)) {
+      return;
+    }
+    try {
+      await apiFetch(`/courses/${courseId}`, { method: "DELETE" });
+      toast.success(`Course "${courseName}" deleted.`);
+      await fetchCourses();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        toast.error(err.message);
+      } else {
+        toast.error("Failed to delete course.");
+      }
+    }
+  };
+
   if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg text-text-muted text-sm">
@@ -146,6 +163,25 @@ export default function CoursesPage() {
         ) : (
           <span className="text-text-muted">None</span>
         ),
+      className: "text-right",
+    },
+    {
+      header: "Action",
+      cell: (item) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDeleteCourse(item.id, item.name);
+          }}
+          className="h-7 px-2 text-xs text-text-muted hover:text-danger hover:bg-danger/10"
+          aria-label={`Delete ${item.name}`}
+        >
+          <Trash2 className="h-3.5 w-3.5 mr-1" strokeWidth={1.5} />
+          Delete
+        </Button>
+      ),
       className: "text-right",
     },
   ];

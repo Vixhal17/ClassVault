@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     )
 
     # Core Database
-    DATABASE_URL: str = "postgresql+asyncpg://classvault:classvault@localhost:5432/classvault"
+    DATABASE_URL: str = "postgresql+asyncpg://classvault:classvault@localhost:5433/classvault"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
