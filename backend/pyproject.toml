@@ -1,0 +1,38 @@
+[project]
+name = "classvault-backend"
+version = "0.1.0"
+description = "ClassVault Backend API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "sqlalchemy>=2.0.28",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.1",
+    "pydantic>=2.6.4",
+    "pydantic-settings>=2.2.1",
+    "redis>=5.0.2",
+    "arq>=0.25.0",
+    "aioboto3>=12.3.0",
+    "argon2-cffi>=23.1.0",
+    "pyjwt[crypto]>=2.8.0",
+    "pymupdf>=1.23.26",
+    "qdrant-client>=1.8.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.2",
+    "pytest-asyncio>=0.23.5",
+    "pytest-cov>=4.1.0",
+    "locust>=2.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
