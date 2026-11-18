@@ -19,8 +19,7 @@ $bannedPatterns = @(
 )
 
 foreach ($file in $targetFiles) {
-    $content = Get-Content $file.FullName -Raw
-    $lines = Get-Content $file.FullName
+    $lines = Get-Content -LiteralPath $file.FullName
 
     foreach ($pat in $bannedPatterns) {
         for ($i = 0; $i -lt $lines.Count; $i++) {

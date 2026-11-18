@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     ALLOWED_EMAIL_DOMAIN: Optional[str] = None
 
     # Initial Admin Seeding
-    ADMIN_EMAIL: str = "admin@classvault.local"
+    ADMIN_EMAIL: str = "admin@classvault.edu"
     ADMIN_PASSWORD: str = "AdminPassword123!"
 
     # CORS & Web
