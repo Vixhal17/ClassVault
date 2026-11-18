@@ -8,10 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 import redis.asyncio as aioredis
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.queue import get_arq_pool
-from app.core.rate_limit import get_redis
+from app.core.rate_limit import get_redis, check_sliding_window_rate_limit
+
+settings = get_settings()
 from app.models.user import User, UserRole
 from app.models.unit import Unit
 from app.models.course import Course
@@ -39,6 +42,7 @@ async def upload_file(
     file: UploadFile = FastAPIFile(...),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """
     Upload a unit PDF.
@@ -58,7 +62,17 @@ async def upload_file(
     if not is_admin(current_user) and (current_user.role != UserRole.TEACHER or course.teacher_id != current_user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unit not found.")
 
-    # 3. Read content and validate size
+    # 3. Rate limit file uploads per teacher (30 uploads / hour)
+    if current_user.role == UserRole.TEACHER:
+        await check_sliding_window_rate_limit(
+            redis=redis,
+            key_prefix="file_upload",
+            identifier=str(current_user.id),
+            limit=settings.FILE_UPLOAD_LIMIT_PER_HOUR,
+            window_seconds=3600,
+        )
+
+    # 4. Read content and validate size
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
@@ -293,6 +307,7 @@ async def restore_file(
     file_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """
     Restore a soft-deleted file. Re-queues ingestion so vectors are regenerated.
@@ -309,6 +324,12 @@ async def restore_file(
         arq_pool = await get_arq_pool()
         job_key = f"pdf:{file_id}_{int(time.time())}"
         await arq_pool.enqueue_job("process_pdf", str(file_id), _job_id=job_key)
+    except Exception:
+        pass
+
+    # Bump course_version in Redis to refresh cache
+    try:
+        await redis.incr(f"course_version:{course.id}")
     except Exception:
         pass
 

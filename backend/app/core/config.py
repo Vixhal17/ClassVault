@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     RAG_HYBRID_ENABLED: bool = True
     CHAT_LIMIT_PER_HOUR: int = 20
+    FILE_UPLOAD_LIMIT_PER_HOUR: int = 30
+    GLOBAL_RATE_LIMIT_PER_MINUTE: int = 120
 
 
 @lru_cache()

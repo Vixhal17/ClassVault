@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, LogOut, X, BookOpen } from "lucide-react";
+import { Menu, LogOut, X, BookOpen, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +71,26 @@ export function AppShell({
             })
           )}
         </div>
+
+        {/* Admin Navigation */}
+        {userRole === "admin" && (
+          <div className="space-y-1 border-t border-border pt-4">
+            <div className="px-2 py-1 text-xs font-medium text-text-muted">Administration</div>
+            <Link
+              href="/admin/audit"
+              onClick={() => setMobileMenuOpen(false)}
+              className={cn(
+                "flex items-center gap-2 rounded px-2.5 py-1.5 text-sm transition-colors",
+                pathname === "/admin/audit"
+                  ? "bg-bg font-medium text-text border border-border"
+                  : "text-text-muted hover:bg-bg/50 hover:text-text"
+              )}
+            >
+              <Shield className="h-4 w-4 shrink-0 text-text-muted" strokeWidth={1.5} />
+              <span>Audit Logs</span>
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* User Footer / Sign Out */}
